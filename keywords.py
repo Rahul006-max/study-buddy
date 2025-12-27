@@ -1,24 +1,34 @@
 import nltk
 import re
+import os
 from collections import Counter
 
-# --- NLTK Resource Download Handler ---
-# We explicitly handle the new resource names to avoid the LookupError
+# --- NLTK Cloud Setup ---
+# On Streamlit Cloud, we need to explicitly point to a writable directory
+# to store the NLTK data.
+nltk_data_dir = os.path.expanduser('~/nltk_data')
+# Add this directory to NLTK's search path
+nltk.data.path.insert(0, nltk_data_dir)
+
 def setup_nltk():
+    """Downloads necessary NLTK data for the cloud environment."""
+    # 1. Download the new Tab-based Tokenizer (Required for Python 3.12+ / New NLTK)
     try:
-        nltk.data.find('tokenizers/punkt')
+        nltk.data.find('tokenizers/punkt_tab')
     except LookupError:
-        nltk.download('punkt', quiet=True)
+        # Download to our specific directory
+        nltk.download('punkt_tab', download_dir=nltk_data_dir, quiet=True)
     
+    # 2. Download the POS Tagger
     try:
         nltk.data.find('taggers/averaged_perceptron_tagger_eng')
     except LookupError:
-        nltk.download('averaged_perceptron_tagger_eng', quiet=True)
+        nltk.download('averaged_perceptron_tagger_eng', download_dir=nltk_data_dir, quiet=True)
 
-# Initialize resources immediately when the module loads
+# Run setup immediately
 setup_nltk()
 
-# Expanded Stopwords (Targeting Data Mining/IT domain noise)
+# --- Stopwords ---
 STOPWORDS = {
     'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours',
     'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 'her', 'hers',
@@ -44,42 +54,30 @@ class ConceptExtractor:
         if not text:
             return []
 
-        # 1. Clean text slightly for tokenization
-        # Replace CamelCase (e.g. "DataMining" -> "Data Mining") to help extraction
+        # 1. Clean text (Split CamelCase)
         cleaned_text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
         
-        # 2. Tokenize using NLTK
+        # 2. Tokenize
         tokens = nltk.word_tokenize(cleaned_text)
         
-        # 3. POS Tagging (Part of Speech)
-        # Returns a list of tuples: [('Data', 'NNS'), ('mining', 'NN'), ...]
-        # This now uses the 'averaged_perceptron_tagger_eng' resource correctly
+        # 3. POS Tagging
         tagged_tokens = nltk.pos_tag(tokens)
         
-        # 4. Filter for Concepts
-        # We only want Nouns: NN, NNS (singular/plural nouns), NNP, NNPS (Proper nouns)
+        # 4. Filter Nouns
         candidate_phrases = []
         
         for word, tag in tagged_tokens:
-            # Standardize
             word_lower = word.lower()
-            
-            # Skip stopwords and non-alpha
             if word_lower in STOPWORDS or not word.isalpha():
                 continue
-                
-            # Keep only Nouns
             if tag.startswith('NN'):
                 candidate_phrases.append(word_lower)
                 
-        # 5. Frequency Count
         if not candidate_phrases:
             return []
 
+        # 5. Frequency
         frequency = Counter(candidate_phrases)
-        
-        # 6. Sort and Return Top N
         top_keywords = frequency.most_common(top_n)
         
-        # Capitalize for display
         return [kw[0].capitalize() for kw in top_keywords]
