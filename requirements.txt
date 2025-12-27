@@ -1,7 +1,6 @@
 streamlit
 PyPDF2
-nltk
-scikit-learn
+sentence-transformers
 groq
-# Remove 'ollama' and 'sentence-transformers' if you move fully to APIs
-# Keep sentence-transformers if you still want the SemanticQA search logic locally
+nltk
+numpy
