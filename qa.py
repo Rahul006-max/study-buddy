@@ -1,51 +1,62 @@
 import numpy as np
+from groq import Groq
+from sentence_transformers import SentenceTransformer
 
 class SemanticQA:
-    def __init__(self, model):
+    def __init__(self, model, api_key):
         self.model = model
-        self.context_chunks = []
+        self.client = Groq(api_key=api_key)
         self.chunk_embeddings = None
+        self.context_chunks = []
 
     def prepare_context(self, text):
-        """
-        Splits text into chunks and computes embeddings for retrieval.
-        """
-        # Create chunks (paragraphs or roughly 3 sentences)
-        raw_chunks = text.split('\n\n')
-        self.context_chunks = [c.strip() for c in raw_chunks if len(c.strip()) > 50]
-        
-        # If the PDF didn't have paragraphs, fall back to fixed length splitting
-        if not self.context_chunks:
-            sentences = text.split('. ')
-            chunk = []
-            for sent in sentences:
-                chunk.append(sent)
-                if len(' '.join(chunk)) > 300:
-                    self.context_chunks.append('. '.join(chunk))
-                    chunk = []
-            if chunk:
-                self.context_chunks.append('. '.join(chunk))
-
+        self.context_chunks = [c.strip() for c in text.split('\n\n') if len(c.strip()) > 50]
         if not self.context_chunks:
             self.context_chunks = [text]
-
-        # Embed chunks
         self.chunk_embeddings = self.model.encode(self.context_chunks, convert_to_tensor=False)
 
     def ask(self, question):
-        """
-        Finds the most relevant chunk to answer the question.
-        """
         if not self.context_chunks:
             return "I'm sorry, I couldn't process the document content."
 
-        # Embed the question
+        # 1. Embed Question
         query_embedding = self.model.encode([question], convert_to_tensor=False)
 
-        # Calculate cosine similarity (dot product for normalized vectors)
+        # 2. Similarity Search (Dot Product)
         scores = np.dot(self.chunk_embeddings, query_embedding.T).flatten()
 
-        # Get index of highest score
-        best_idx = np.argmax(scores)
-        
-        return self.context_chunks[best_idx]
+        # 3. RETRIEVE TOP 3 MATCHES (Multi-Context Strategy)
+        # Instead of taking the single best, we take top 3 to give AI more info.
+        top_k_indices = np.argsort(scores)[::-1][:3]
+        best_contexts = [self.context_chunks[i] for i in top_k_indices]
+
+        # 4. Combine Contexts
+        # We present all 3 pieces to the AI so it can synthesize the best answer
+        context_text = "\n\n".join([f"[Source {i+1}]: {ctx}" for i, ctx in enumerate(best_contexts)])
+
+        # 5. Generate Answer with System Instruction
+        try:
+            response = self.client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise document analyzer. "
+                            "Answer the user's question based ONLY on the provided context segments."
+                            "\nINSTRUCTIONS:"
+                            "\n1. SYNTHESIZE: If information in Source 1 contradicts Source 2, reconcile it."
+                            "\n2. ACCURACY: If the answer is not in the context, say 'The text does not contain this information'."
+                            "\n3. COMPLETE: Provide a comprehensive answer using all sources."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Question: {question}\n\nContext Segments:\n{context_text}"
+                    }
+                ],
+                model='llama-3.1-8b-instant',
+                temperature=0.1, # Low temp for factual accuracy
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"Error retrieving answer: {str(e)}"
